@@ -16,8 +16,11 @@ namespace Causal\Cloudflare\Hooks;
 
 use Causal\Cloudflare\Services\CloudflareService;
 use TYPO3\CMS\Core\Configuration\ExtensionConfiguration;
+use TYPO3\CMS\Core\TimeTracker\TimeTracker;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
 use TYPO3\CMS\Core\Authentication\AbstractUserAuthentication;
+use TYPO3\CMS\Frontend\ContentObject\ContentObjectRenderer;
+use TYPO3\CMS\Frontend\Controller\TypoScriptFrontendController;
 
 /**
  * Hook for clearing cache on Cloudflare.
@@ -170,102 +173,27 @@ class TCEmain
      */
     protected function getFrontendUrl($uid)
     {
-        if (isset($GLOBALS['BE_USER']) && $GLOBALS['BE_USER']->workspace != 0) {
-            // Preview in workspaces is not supported!
-            return null;
+        if (!is_object($GLOBALS['TT'])) {
+            $GLOBALS['TT'] = new TimeTracker();
+            $GLOBALS['TT']->start();
         }
 
-        /** @var \TYPO3\CMS\Frontend\Controller\TypoScriptFrontendController $tsfe */
-        $tsfe = \TYPO3\CMS\Core\Utility\GeneralUtility::makeInstance(
-            \TYPO3\CMS\Frontend\Controller\TypoScriptFrontendController::class,
-            $GLOBALS['TYPO3_CONF_VARS'],
-            $uid,
-            ''
-        );
-        $GLOBALS['TSFE'] = $tsfe;
-
-        $GLOBALS['TT'] = GeneralUtility::makeInstance(\TYPO3\CMS\Core\TimeTracker\TimeTracker::class);
-        $GLOBALS['TT']->start();
-        $GLOBALS['TSFE']->config['config']['language'] = 'default';
-
-        // Fire all the required function to get the TYPO3 Frontend all set up
-        $GLOBALS['TSFE']->id = $uid;
-        $GLOBALS['TSFE']->connectToDB();
-
-        // Prevent database debug messages from messing up the output
-        $GLOBALS['TYPO3_DB']->debugOutput = false;
-
-        $GLOBALS['TSFE']->initLLVars();
-        $GLOBALS['TSFE']->initFEuser();
-
-        // Look up the page
-        $GLOBALS['TSFE']->sys_page = GeneralUtility::makeInstance(\TYPO3\CMS\Frontend\Page\PageRepository::class);
-        $GLOBALS['TSFE']->sys_page->init($GLOBALS['TSFE']->showHiddenPage);
-
-        // If the page is not found (if the page is a sysfolder, etc), then return no URL,
-        // preventing any further processing which would result in an error page.
-        $page = $GLOBALS['TSFE']->sys_page->getPage($uid);
-
-        if (empty($page)) {
-            return null;
-        }
-
-        // If the page is a shortcut, look up the page to which the shortcut references,
-        // and do the same check as above.
-        if ($page['doktype'] == 4 && count($GLOBALS['TSFE']->getPageShortcut($page['shortcut'], $page['shortcut_mode'], $page['uid'])) == 0) {
-            return null;
-        }
-
-        // Spacer pages and sysfolders result in a page not found page too...
-        if ($page['doktype'] == 199 || $page['doktype'] == 254) {
-            return null;
-        }
-
-        $GLOBALS['TSFE']->getPageAndRootline();
-        $GLOBALS['TSFE']->initTemplate();
-        $GLOBALS['TSFE']->forceTemplateParsing = 1;
-
-        // Find the root template
-        $GLOBALS['TSFE']->tmpl->start($GLOBALS['TSFE']->rootLine);
-
-        // Fill the pSetup from the same variables from the same location as where
-        // tslib_fe->getConfigArray will get them, so they can be checked before
-        // this function is called
-        //$GLOBALS['TSFE']->sPre = $GLOBALS['TSFE']->tmpl->setup['types.'][$GLOBALS['TSFE']->type];    // toplevel - objArrayName
-        //$GLOBALS['TSFE']->pSetup = $GLOBALS['TSFE']->tmpl->setup[$GLOBALS['TSFE']->sPre . '.'];
-
-        // If there is no root template found, there is no point in continuing which would
-        // result in a 'template not found' page and then call exit PHP.
-        // And the same applies if pSetup is empty, which would result in a
-        // "The page is not configured" message.
-        if (!$GLOBALS['TSFE']->tmpl->loaded || ($GLOBALS['TSFE']->tmpl->loaded && !$GLOBALS['TSFE']->pSetup)) {
-            //return null;
-        }
-
-        $GLOBALS['TSFE']->checkAlternativeIdMethods();
-        $GLOBALS['TSFE']->determineId();
-        try {
+        if (!is_object($GLOBALS['TSFE'])) {
+            $GLOBALS['TSFE'] = GeneralUtility::makeInstance(TypoScriptFrontendController::class, $GLOBALS['TYPO3_CONF_VARS'], $uid, 0);
+            $GLOBALS['TSFE']->connectToDB();
+            $GLOBALS['TSFE']->initFEuser();
+            $GLOBALS['TSFE']->determineId();
+            $GLOBALS['TSFE']->initTemplate();
             $GLOBALS['TSFE']->getConfigArray();
-        } catch (\Exception $e) {
-            // Typicall problem: #1294587218: No TypoScript template found!
-            return null;
         }
 
-        // Get linkVars, absRefPrefix, etc
-        \TYPO3\CMS\Frontend\Page\PageGenerator::pagegenInit();
-
-        /** @var $contentObj \TYPO3\CMS\Frontend\ContentObject\ContentObjectRenderer */
-        $contentObj = GeneralUtility::makeInstance(\TYPO3\CMS\Frontend\ContentObject\ContentObjectRenderer::class);
-        $contentObj->start([], '');
-
-        // Create the URL
-        $link = $contentObj->typolink('', [
-            'parameter' => $uid,
-            'forceAbsoluteUrl' => 1,
-        ]);
-        $url = $contentObj->lastTypoLinkUrl;
-
-        return $url;
+        $cObj = GeneralUtility::makeInstance(ContentObjectRenderer::class);
+        return $cObj->typoLink_URL(
+            array(
+                'parameter' => $uid,
+                'forceAbsoluteUrl' => true,
+            )
+        );
     }
 
     /**
